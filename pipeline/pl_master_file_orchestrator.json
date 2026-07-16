@@ -1,0 +1,516 @@
+{
+	"name": "pl_master_file_orchestrator",
+	"properties": {
+		"activities": [
+			{
+				"name": "lkp_get_due_integrations",
+				"type": "Lookup",
+				"dependsOn": [],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderStoredProcedureName": "[config].[usp_GetDueIntegrations]",
+						"storedProcedureParameters": {
+							"AsOfDateTimeUtc": {
+								"type": "DateTime",
+								"value": null
+							}
+						},
+						"queryTimeout": "02:00:00",
+						"partitionOption": "None"
+					},
+					"dataset": {
+						"referenceName": "ds_sql",
+						"type": "DatasetReference",
+						"parameters": {
+							"p_schema": "config",
+							"p_table": "IntegrationConfig",
+							"p_db_domain_name": {
+								"value": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+								"type": "Expression"
+							},
+							"p_db_name": {
+								"value": "@pipeline().globalParameters.DB_NAME",
+								"type": "Expression"
+							}
+						}
+					},
+					"firstRowOnly": false
+				}
+			},
+			{
+				"name": "fe_process_integrations",
+				"type": "ForEach",
+				"dependsOn": [
+					{
+						"activity": "sv_trigger_type",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					},
+					{
+						"activity": "sv_batch_date",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"items": {
+						"value": "@activity('lkp_get_due_integrations').output.value",
+						"type": "Expression"
+					},
+					"batchCount": 5,
+					"activities": [
+						{
+							"name": "sw_child_pipeline_router",
+							"type": "Switch",
+							"dependsOn": [],
+							"userProperties": [],
+							"typeProperties": {
+								"on": {
+									"value": "@item().ChildPipelineName",
+									"type": "Expression"
+								},
+								"cases": [
+									{
+										"value": "pl_child_copy_file",
+										"activities": [
+											{
+												"name": "pl_child_copy_file",
+												"type": "ExecutePipeline",
+												"dependsOn": [],
+												"policy": {
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"pipeline": {
+														"referenceName": "pl_child_copy_file",
+														"type": "PipelineReference"
+													},
+													"waitOnCompletion": true,
+													"parameters": {
+														"p_integration_id": {
+															"value": "@item().IntegrationId",
+															"type": "Expression"
+														},
+														"p_integration_name": {
+															"value": "@item().IntegrationName",
+															"type": "Expression"
+														},
+														"p_batch_date": {
+															"value": "@variables('v_batch_date')",
+															"type": "Expression"
+														},
+														"p_trigger_type": {
+															"value": "@variables('v_trigger_type')",
+															"type": "Expression"
+														},
+														"p_master_run_id": {
+															"value": "@pipeline().RunId",
+															"type": "Expression"
+														},
+														"p_source_path": {
+															"value": "@item().SourceFolderPath",
+															"type": "Expression"
+														},
+														"p_source_container": {
+															"value": "@item().SourceContainerName",
+															"type": "Expression"
+														}
+													}
+												}
+											}
+										]
+									},
+									{
+										"value": "pl_child_file_to_db",
+										"activities": [
+											{
+												"name": "pl_child_file_to_db",
+												"type": "ExecutePipeline",
+												"dependsOn": [],
+												"policy": {
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"pipeline": {
+														"referenceName": "pl_child_file_to_db",
+														"type": "PipelineReference"
+													},
+													"waitOnCompletion": true,
+													"parameters": {
+														"p_integration_id": {
+															"value": "@item().IntegrationId",
+															"type": "Expression"
+														},
+														"p_master_run_id": {
+															"value": "@pipeline().RunId",
+															"type": "Expression"
+														},
+														"p_batch_date": {
+															"value": "@variables('v_batch_date')",
+															"type": "Expression"
+														},
+														"p_trigger_type": {
+															"value": "@variables('v_trigger_type')",
+															"type": "Expression"
+														},
+														"p_integration_name": {
+															"value": "@item().IntegrationName",
+															"type": "Expression"
+														},
+														"p_source_path": {
+															"value": "@item().SourceFolderPath",
+															"type": "Expression"
+														},
+														"p_source_container": {
+															"value": "@item().SourceContainerName",
+															"type": "Expression"
+														}
+													}
+												}
+											}
+										]
+									},
+									{
+										"value": "pl_child_transform_delimited",
+										"activities": [
+											{
+												"name": "pl_child_transform_delimited",
+												"type": "ExecutePipeline",
+												"dependsOn": [],
+												"policy": {
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"pipeline": {
+														"referenceName": "pl_child_transform_delimited",
+														"type": "PipelineReference"
+													},
+													"waitOnCompletion": true,
+													"parameters": {
+														"p_integration_id": {
+															"value": "@item().IntegrationId",
+															"type": "Expression"
+														},
+														"p_trigger_type": {
+															"value": "@variables('v_trigger_type')",
+															"type": "Expression"
+														},
+														"p_batch_date": {
+															"value": "@variables('v_batch_date')",
+															"type": "Expression"
+														},
+														"p_integration_name": {
+															"value": "@item().IntegrationName",
+															"type": "Expression"
+														},
+														"p_master_run_id": {
+															"value": "@pipeline().RunId",
+															"type": "Expression"
+														},
+														"p_source_path": {
+															"value": "@item().SourceFolderPath",
+															"type": "Expression"
+														},
+														"p_source_container": {
+															"value": "@item().SourceContainerName",
+															"type": "Expression"
+														}
+													}
+												}
+											}
+										]
+									},
+									{
+										"value": "pl_child_batch_split",
+										"activities": [
+											{
+												"name": "pl_child_batch_split",
+												"type": "ExecutePipeline",
+												"dependsOn": [],
+												"policy": {
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"pipeline": {
+														"referenceName": "pl_child_batch_split",
+														"type": "PipelineReference"
+													},
+													"waitOnCompletion": true,
+													"parameters": {
+														"p_integration_id": {
+															"value": "@item().IntegrationId",
+															"type": "Expression"
+														},
+														"p_integration_name": {
+															"value": "@item().IntegrationName",
+															"type": "Expression"
+														},
+														"p_trigger_type": {
+															"value": "@variables('v_trigger_type')",
+															"type": "Expression"
+														},
+														"p_batch_date": {
+															"value": "@variables('v_batch_date')",
+															"type": "Expression"
+														},
+														"p_master_run_id": {
+															"value": "@pipeline().RunId",
+															"type": "Expression"
+														},
+														"p_source_path": {
+															"value": "@item().SourceFolderPath",
+															"type": "Expression"
+														},
+														"p_source_container": {
+															"value": "@item().SourceContainerName",
+															"type": "Expression"
+														}
+													}
+												}
+											}
+										]
+									},
+									{
+										"value": "pl_child_transform_xml",
+										"activities": [
+											{
+												"name": "pl_child_transform_xml",
+												"type": "ExecutePipeline",
+												"dependsOn": [],
+												"policy": {
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"pipeline": {
+														"referenceName": "pl_child_transform_xml",
+														"type": "PipelineReference"
+													},
+													"waitOnCompletion": true,
+													"parameters": {
+														"p_integration_id": {
+															"value": "@item().IntegrationId",
+															"type": "Expression"
+														},
+														"p_batch_date": {
+															"value": "@variables('v_batch_date')",
+															"type": "Expression"
+														},
+														"p_trigger_type": {
+															"value": "@variables('v_trigger_type')",
+															"type": "Expression"
+														},
+														"p_integration_name": {
+															"value": "@item().IntegrationName",
+															"type": "Expression"
+														},
+														"p_master_run_id": {
+															"value": "@pipeline().RunId",
+															"type": "Expression"
+														},
+														"p_source_path": {
+															"value": "@item().SourceFolderPath",
+															"type": "Expression"
+														},
+														"p_source_container": {
+															"value": "@item().SourceContainerName",
+															"type": "Expression"
+														}
+													}
+												}
+											}
+										]
+									},
+									{
+										"value": "pl_child_transform_json",
+										"activities": [
+											{
+												"name": "pl_child_transform_json",
+												"type": "ExecutePipeline",
+												"dependsOn": [],
+												"policy": {
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"pipeline": {
+														"referenceName": "pl_child_transform_json",
+														"type": "PipelineReference"
+													},
+													"waitOnCompletion": true,
+													"parameters": {
+														"p_integration_id": {
+															"value": "@item().IntegrationId",
+															"type": "Expression"
+														},
+														"p_integration_name": {
+															"value": "@item().IntegrationName",
+															"type": "Expression"
+														},
+														"p_batch_date": {
+															"value": "@variables('v_batch_date')",
+															"type": "Expression"
+														},
+														"p_trigger_type": {
+															"value": "@variables('v_trigger_type')",
+															"type": "Expression"
+														},
+														"p_master_run_id": {
+															"value": "@pipeline().RunId",
+															"type": "Expression"
+														},
+														"p_source_path": {
+															"value": "@item().SourceFolderPath",
+															"type": "Expression"
+														},
+														"p_source_container": {
+															"value": "@item().SourceContainerName",
+															"type": "Expression"
+														}
+													}
+												}
+											}
+										]
+									},
+									{
+										"value": "pl_child_db_to_file",
+										"activities": [
+											{
+												"name": "pl_child_db_to_file",
+												"type": "ExecutePipeline",
+												"dependsOn": [],
+												"policy": {
+													"secureInput": false
+												},
+												"userProperties": [],
+												"typeProperties": {
+													"pipeline": {
+														"referenceName": "pl_child_db_to_file",
+														"type": "PipelineReference"
+													},
+													"waitOnCompletion": true,
+													"parameters": {
+														"p_integration_id": {
+															"value": "@item().IntegrationId",
+															"type": "Expression"
+														},
+														"p_master_run_id": {
+															"value": "@pipeline().RunId",
+															"type": "Expression"
+														},
+														"p_batch_date": {
+															"value": "@variables('v_batch_date')",
+															"type": "Expression"
+														},
+														"p_trigger_type": {
+															"value": "@variables('v_trigger_type')",
+															"type": "Expression"
+														},
+														"p_integration_name": {
+															"value": "@item().IntegrationName",
+															"type": "Expression"
+														}
+													}
+												}
+											}
+										]
+									}
+								],
+								"defaultActivities": [
+									{
+										"name": "fail_unknown_child_pipeline",
+										"type": "Fail",
+										"dependsOn": [],
+										"userProperties": [],
+										"typeProperties": {
+											"message": {
+												"value": "@concat(\r\n    'Unsupported child pipeline returned from metadata: ',\r\n    item().ChildPipelineName\r\n)",
+												"type": "Expression"
+											},
+											"errorCode": "ROUTING_001"
+										}
+									}
+								]
+							}
+						}
+					]
+				}
+			},
+			{
+				"name": "sv_trigger_type",
+				"type": "SetVariable",
+				"dependsOn": [
+					{
+						"activity": "lkp_get_due_integrations",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"variableName": "v_trigger_type",
+					"value": {
+						"value": "@pipeline().TriggerType",
+						"type": "Expression"
+					}
+				}
+			},
+			{
+				"name": "sv_batch_date",
+				"type": "SetVariable",
+				"dependsOn": [
+					{
+						"activity": "lkp_get_due_integrations",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"variableName": "v_batch_date",
+					"value": {
+						"value": "@formatDateTime(utcNow(), 'yyyy-MM-dd')",
+						"type": "Expression"
+					}
+				}
+			}
+		],
+		"variables": {
+			"v_trigger_type": {
+				"type": "String"
+			},
+			"v_batch_date": {
+				"type": "String"
+			}
+		},
+		"annotations": [],
+		"lastPublishTime": "2026-06-17T13:19:03Z"
+	},
+	"type": "Microsoft.DataFactory/factories/pipelines"
+}

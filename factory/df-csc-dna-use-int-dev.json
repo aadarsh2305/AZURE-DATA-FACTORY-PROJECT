@@ -1,0 +1,49 @@
+{
+	"name": "df-csc-dna-use-int-dev",
+	"properties": {
+		"globalParameters": {
+			"gp_preprocess_function_url": {
+				"type": "string",
+				"value": "https://enterprise-apidev.campbells.com/fx-csc-dna-use-d-int-preprocess/validatefile"
+			},
+			"EnvironmentName": {
+				"type": "string",
+				"value": "dev"
+			},
+			"DB_DOMAIN_NAME": {
+				"type": "string",
+				"value": "amazrusedintsql01.database.windows.net"
+			},
+			"DB_NAME": {
+				"type": "string",
+				"value": "integration_sqldb"
+			},
+			"gp_postprocess_function_url": {
+				"type": "string",
+				"value": "https://enterprise-apidev.campbells.com/fx-csc-dna-use-d-int-postproc/PostProcess"
+			},
+			"gp_adls_url": {
+				"type": "string",
+				"value": "https://sacscdnausedevintblk.dfs.core.windows.net/"
+			},
+			"gp_transform_file_function_url": {
+				"type": "string",
+				"value": "https://enterprise-apidev.campbells.com/fx-csc-dna-use-d-int-transform/transform/file/"
+			},
+			"gp_kv_subscription_key_url": {
+				"type": "string",
+				"value": "https://kv-csc-dna-use-dev-btp.vault.azure.net/secrets/Ocp-Apim-Subscription-Key/345f01877a4743148f6815d4084ad6d2?api-version=7.4"
+			}
+		},
+		"trustModeClaimForMi": {
+			"value": "Enabled",
+			"editable": true
+		}
+	},
+	"location": "eastus",
+	"identity": {
+		"type": "SystemAssigned",
+		"principalId": "68ba04a6-c8b9-486a-964f-c909cb29b6fe",
+		"tenantId": "a0a180f0-657a-438b-891f-49417a6dd8bc"
+	}
+}

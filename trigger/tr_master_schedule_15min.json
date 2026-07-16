@@ -1,0 +1,25 @@
+{
+	"name": "tr_master_schedule_15min",
+	"properties": {
+		"description": "Triggers pl_master_file_orchestrator every 15 minutes for scheduled integration processing.",
+		"annotations": [],
+		"runtimeState": "Started",
+		"pipelines": [
+			{
+				"pipelineReference": {
+					"referenceName": "pl_master_file_orchestrator",
+					"type": "PipelineReference"
+				}
+			}
+		],
+		"type": "ScheduleTrigger",
+		"typeProperties": {
+			"recurrence": {
+				"frequency": "Minute",
+				"interval": 15,
+				"startTime": "2026-06-17T12:00:00Z",
+				"timeZone": "UTC"
+			}
+		}
+	}
+}

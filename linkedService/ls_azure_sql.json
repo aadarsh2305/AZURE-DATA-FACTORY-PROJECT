@@ -1,0 +1,22 @@
+{
+	"name": "ls_azure_sql",
+	"properties": {
+		"parameters": {
+			"p_db_domain_name": {
+				"type": "string"
+			},
+			"p_db_name": {
+				"type": "string"
+			}
+		},
+		"annotations": [],
+		"type": "AzureSqlDatabase",
+		"typeProperties": {
+			"server": "@{linkedService().p_db_domain_name}",
+			"database": "@{linkedService().p_db_name}",
+			"encrypt": "mandatory",
+			"trustServerCertificate": true,
+			"authenticationType": "SystemAssignedManagedIdentity"
+		}
+	}
+}

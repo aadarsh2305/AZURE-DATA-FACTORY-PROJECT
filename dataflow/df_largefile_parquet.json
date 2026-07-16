@@ -1,0 +1,45 @@
+{
+	"name": "df_largefile_parquet",
+	"properties": {
+		"type": "MappingDataFlow",
+		"typeProperties": {
+			"sources": [
+				{
+					"dataset": {
+						"referenceName": "ds_adls_parquet_src",
+						"type": "DatasetReference"
+					},
+					"name": "parquetsource"
+				}
+			],
+			"sinks": [
+				{
+					"dataset": {
+						"referenceName": "ds_adls_parquet_src",
+						"type": "DatasetReference"
+					},
+					"name": "parquetoutput"
+				}
+			],
+			"transformations": [],
+			"scriptLines": [
+				"parameters{",
+				"     p_partition_count as integer",
+				"}",
+				"source(allowSchemaDrift: true,",
+				"     validateSchema: false,",
+				"     ignoreNoFilesFound: false,",
+				"     format: 'parquet') ~> parquetsource",
+				"parquetsource sink(allowSchemaDrift: true,",
+				"     validateSchema: false,",
+				"     format: 'parquet',",
+				"     umask: 0022,",
+				"     preCommands: [],",
+				"     postCommands: [],",
+				"     skipDuplicateMapInputs: true,",
+				"     skipDuplicateMapOutputs: true,",
+				"     partitionBy('roundRobin', ($p_partition_count))) ~> parquetoutput"
+			]
+		}
+	}
+}

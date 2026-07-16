@@ -1,0 +1,48 @@
+{
+	"name": "ds_sql",
+	"properties": {
+		"linkedServiceName": {
+			"referenceName": "ls_azure_sql",
+			"type": "LinkedServiceReference",
+			"parameters": {
+				"p_db_domain_name": {
+					"value": "@dataset().p_db_domain_name",
+					"type": "Expression"
+				},
+				"p_db_name": {
+					"value": "@dataset().p_db_name",
+					"type": "Expression"
+				}
+			}
+		},
+		"parameters": {
+			"p_schema": {
+				"type": "string",
+				"defaultValue": "config"
+			},
+			"p_table": {
+				"type": "string",
+				"defaultValue": "IntegrationConfig"
+			},
+			"p_db_domain_name": {
+				"type": "string"
+			},
+			"p_db_name": {
+				"type": "string"
+			}
+		},
+		"annotations": [],
+		"type": "AzureSqlTable",
+		"schema": [],
+		"typeProperties": {
+			"schema": {
+				"value": "@dataset().p_schema",
+				"type": "Expression"
+			},
+			"table": {
+				"value": "@dataset().p_table",
+				"type": "Expression"
+			}
+		}
+	}
+}

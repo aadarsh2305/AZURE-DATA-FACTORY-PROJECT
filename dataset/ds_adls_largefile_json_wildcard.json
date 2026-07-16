@@ -1,0 +1,32 @@
+{
+	"name": "ds_adls_largefile_json_wildcard",
+	"properties": {
+		"linkedServiceName": {
+			"referenceName": "ls_adls",
+			"type": "LinkedServiceReference",
+			"parameters": {
+				"p_adls_url": "@dataset().p_adls_url"
+			}
+		},
+		"parameters": {
+			"p_container_name": {
+				"type": "string"
+			},
+			"p_adls_url": {
+				"type": "string"
+			}
+		},
+		"annotations": [],
+		"type": "Json",
+		"typeProperties": {
+			"location": {
+				"type": "AzureBlobFSLocation",
+				"fileSystem": {
+					"value": "@dataset().p_container_name",
+					"type": "Expression"
+				}
+			}
+		},
+		"schema": {}
+	}
+}

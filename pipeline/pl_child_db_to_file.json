@@ -1,0 +1,1237 @@
+{
+	"name": "pl_child_db_to_file",
+	"properties": {
+		"description": "child pipeline to support SQL to ADLS export pattern, where data is extracted from a SQL source and written to Azure Data Lake Storage (ADLS) in a configurable file format.",
+		"activities": [
+			{
+				"name": "lkp_acquire_runlock",
+				"type": "Lookup",
+				"dependsOn": [],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderStoredProcedureName": "[control].[usp_AcquireRunLock]",
+						"storedProcedureParameters": {
+							"IntegrationId": {
+								"type": "Int64",
+								"value": {
+									"value": "@pipeline().parameters.p_integration_id",
+									"type": "Expression"
+								}
+							},
+							"RunId": {
+								"type": "Guid",
+								"value": {
+									"value": "@pipeline().RunId",
+									"type": "Expression"
+								}
+							},
+							"LockTimeoutMinutes": {
+								"type": "Int32",
+								"value": "60"
+							}
+						},
+						"queryTimeout": "02:00:00",
+						"partitionOption": "None"
+					},
+					"dataset": {
+						"referenceName": "ds_sql",
+						"type": "DatasetReference",
+						"parameters": {
+							"p_schema": "config",
+							"p_table": "IntegrationConfig",
+							"p_db_domain_name": {
+								"value": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+								"type": "Expression"
+							},
+							"p_db_name": {
+								"value": "@pipeline().globalParameters.DB_NAME",
+								"type": "Expression"
+							}
+						}
+					}
+				}
+			},
+			{
+				"name": "if_run_lock_acquired",
+				"type": "IfCondition",
+				"dependsOn": [
+					{
+						"activity": "lkp_acquire_runlock",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"expression": {
+						"value": "@equals(activity('lkp_acquire_runlock').output.firstRow.IsAcquired, true)",
+						"type": "Expression"
+					},
+					"ifFalseActivities": [
+						{
+							"name": "LOCK_NOT_ACQUIRED",
+							"description": "Fail as could not acquire Lock",
+							"type": "Fail",
+							"dependsOn": [],
+							"userProperties": [],
+							"typeProperties": {
+								"message": {
+									"value": "@concat(\n    'Execution failed because an active integration lock already exists and has not yet expired. Please verify and release the lock if required. ',\n    'IntegrationId=', string(pipeline().parameters.p_integration_id),\n    ', IntegrationName=', pipeline().parameters.p_integration_name,\n    ', PipelineRunId=', pipeline().RunId\n)",
+									"type": "Expression"
+								},
+								"errorCode": "LOCK_NOT_ACQUIRED"
+							}
+						}
+					],
+					"ifTrueActivities": [
+						{
+							"name": "wb_get_subscription_key",
+							"type": "WebActivity",
+							"dependsOn": [],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"method": "GET",
+								"url": {
+									"value": "@pipeline().globalParameters.gp_kv_subscription_key_url",
+									"type": "Expression"
+								},
+								"authentication": {
+									"type": "MSI",
+									"resource": "https://vault.azure.net"
+								}
+							}
+						},
+						{
+							"name": "sv_subscription_key",
+							"type": "SetVariable",
+							"dependsOn": [
+								{
+									"activity": "wb_get_subscription_key",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"policy": {
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"variableName": "v_subscription_key",
+								"value": {
+									"value": "@activity('wb_get_subscription_key').output.value",
+									"type": "Expression"
+								}
+							}
+						},
+						{
+							"name": "sp_release_runlock1",
+							"type": "SqlServerStoredProcedure",
+							"dependsOn": [
+								{
+									"activity": "wb_get_subscription_key",
+									"dependencyConditions": [
+										"Failed"
+									]
+								}
+							],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"storedProcedureName": "[control].[usp_ReleaseRunLock]",
+								"storedProcedureParameters": {
+									"IntegrationId": {
+										"value": {
+											"value": "@pipeline().parameters.p_integration_id",
+											"type": "Expression"
+										},
+										"type": "Int64"
+									},
+									"RunId": {
+										"value": {
+											"value": "@if(\n    equals(pipeline().parameters.p_trigger_type, 'EventTrigger'),\n    pipeline().parameters.p_event_run_id,\n    pipeline().RunId\n)",
+											"type": "Expression"
+										},
+										"type": "Guid"
+									}
+								}
+							},
+							"linkedServiceName": {
+								"referenceName": "ls_azure_sql",
+								"type": "LinkedServiceReference",
+								"parameters": {
+									"p_db_domain_name": {
+										"value": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+										"type": "Expression"
+									},
+									"p_db_name": {
+										"value": "@pipeline().globalParameters.DB_NAME",
+										"type": "Expression"
+									}
+								}
+							}
+						}
+					]
+				}
+			},
+			{
+				"name": "lkp_get_integration_config",
+				"type": "Lookup",
+				"dependsOn": [
+					{
+						"activity": "if_run_lock_acquired",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderStoredProcedureName": "[config].[usp_GetIntegrationConfig]",
+						"storedProcedureParameters": {
+							"IntegrationId": {
+								"type": "Int64",
+								"value": {
+									"value": "@pipeline().parameters.p_integration_id",
+									"type": "Expression"
+								}
+							}
+						},
+						"queryTimeout": "02:00:00",
+						"partitionOption": "None"
+					},
+					"dataset": {
+						"referenceName": "ds_sql",
+						"type": "DatasetReference",
+						"parameters": {
+							"p_schema": "config",
+							"p_table": "IntegrationConfig",
+							"p_db_domain_name": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+							"p_db_name": "@pipeline().globalParameters.DB_NAME"
+						}
+					}
+				}
+			},
+			{
+				"name": "sv_config",
+				"type": "SetVariable",
+				"dependsOn": [
+					{
+						"activity": "lkp_get_integration_config",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"variableName": "v_config_json",
+					"value": {
+						"value": "@string(activity('lkp_get_integration_config').output.firstRow)",
+						"type": "Expression"
+					}
+				}
+			},
+			{
+				"name": "lkp_start_run",
+				"type": "Lookup",
+				"dependsOn": [
+					{
+						"activity": "sv_config",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"source": {
+						"type": "AzureSqlSource",
+						"sqlReaderStoredProcedureName": "[audit].[usp_StartRun]",
+						"storedProcedureParameters": {
+							"AdfPipelineName": {
+								"type": "String",
+								"value": {
+									"value": "@pipeline().Pipeline",
+									"type": "Expression"
+								}
+							},
+							"BatchDate": {
+								"type": "DateTime",
+								"value": {
+									"value": "@pipeline().parameters.p_batch_date",
+									"type": "Expression"
+								}
+							},
+							"ChildRunId": {
+								"type": "String",
+								"value": {
+									"value": "@pipeline().RunId",
+									"type": "Expression"
+								}
+							},
+							"EnvironmentName": {
+								"type": "String",
+								"value": {
+									"value": "@pipeline().globalParameters.EnvironmentName",
+									"type": "Expression"
+								}
+							},
+							"IntegrationId": {
+								"type": "Int64",
+								"value": {
+									"value": "@pipeline().parameters.p_integration_id",
+									"type": "Expression"
+								}
+							},
+							"MasterRunId": {
+								"type": "String",
+								"value": {
+									"value": "@pipeline()?.TriggeredByPipelineRunId",
+									"type": "Expression"
+								}
+							},
+							"RetryAttempt": {
+								"type": "Int32",
+								"value": "0"
+							},
+							"SourceFileChecksum": {
+								"type": "String",
+								"value": null
+							},
+							"SourceFileName": {
+								"type": "String",
+								"value": null
+							},
+							"SourceFilePath": {
+								"type": "String",
+								"value": null
+							},
+							"SourceFileSizeBytes": {
+								"type": "Int64",
+								"value": null
+							},
+							"TriggerType": {
+								"type": "String",
+								"value": {
+									"value": "@pipeline().parameters.p_trigger_type",
+									"type": "Expression"
+								}
+							}
+						},
+						"queryTimeout": "02:00:00",
+						"partitionOption": "None"
+					},
+					"dataset": {
+						"referenceName": "ds_sql",
+						"type": "DatasetReference",
+						"parameters": {
+							"p_schema": "config",
+							"p_table": "IntegrationConfig",
+							"p_db_domain_name": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+							"p_db_name": "@pipeline().globalParameters.DB_NAME"
+						}
+					}
+				}
+			},
+			{
+				"name": "sv_run_id",
+				"type": "SetVariable",
+				"dependsOn": [
+					{
+						"activity": "lkp_start_run",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"typeProperties": {
+					"variableName": "v_run_id",
+					"value": {
+						"value": "@activity('lkp_start_run').output.firstRow.RunId",
+						"type": "Expression"
+					}
+				}
+			},
+			{
+				"name": "sw_file_format",
+				"type": "Switch",
+				"dependsOn": [
+					{
+						"activity": "sv_run_id",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"on": {
+						"value": "@json(variables('v_config_json')).TargetFileFormat",
+						"type": "Expression"
+					},
+					"cases": [
+						{
+							"value": "CSV",
+							"activities": [
+								{
+									"name": "cp_sql_to_csv",
+									"type": "Copy",
+									"dependsOn": [],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureSqlSource",
+											"queryTimeout": "02:00:00",
+											"partitionOption": "None"
+										},
+										"sink": {
+											"type": "DelimitedTextSink",
+											"storeSettings": {
+												"type": "AzureBlobFSWriteSettings"
+											},
+											"formatSettings": {
+												"type": "DelimitedTextWriteSettings",
+												"quoteAllText": true,
+												"fileExtension": ".txt"
+											}
+										},
+										"enableStaging": false,
+										"translator": {
+											"type": "TabularTranslator",
+											"typeConversion": true,
+											"typeConversionSettings": {
+												"allowDataTruncation": true,
+												"treatBooleanAsNumber": false
+											}
+										}
+									},
+									"inputs": [
+										{
+											"referenceName": "ds_sql",
+											"type": "DatasetReference",
+											"parameters": {
+												"p_schema": "@first(split(json(variables('v_config_json')).TargetTableName, '.'))",
+												"p_table": "@last(split(json(variables('v_config_json')).TargetTableName, '.'))",
+												"p_db_domain_name": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+												"p_db_name": "@pipeline().globalParameters.DB_NAME"
+											}
+										}
+									],
+									"outputs": [
+										{
+											"referenceName": "ds_adls_delimited_src",
+											"type": "DatasetReference",
+											"parameters": {
+												"p_container": "@json(variables('v_config_json')).TargetContainerName",
+												"p_folder": {
+													"value": "@concat(\n    string(pipeline().parameters.p_integration_id), '/',\n    formatDateTime(utcNow(),'yyyy'), '/',\n    formatDateTime(utcNow(),'MM'), '/',\n    formatDateTime(utcNow(),'dd')\n)",
+													"type": "Expression"
+												},
+												"p_file_name": "@concat('sql_to_adls_export_', formatDateTime(utcNow(),'yyyyMMddHHmmss'), '.csv')",
+												"p_adls_url": "@pipeline().globalParameters.gp_adls_url"
+											}
+										}
+									]
+								},
+								{
+									"name": "complete_run_success_csv",
+									"type": "Lookup",
+									"dependsOn": [
+										{
+											"activity": "cp_sql_to_csv",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureSqlSource",
+											"sqlReaderStoredProcedureName": "[audit].[usp_CompleteRun]",
+											"storedProcedureParameters": {
+												"ErrorActivity": {
+													"type": "String",
+													"value": null
+												},
+												"ErrorCode": {
+													"type": "String",
+													"value": null
+												},
+												"ErrorMessage": {
+													"type": "String",
+													"value": null
+												},
+												"RecordsRead": {
+													"type": "Int64",
+													"value": {
+														"value": "@activity('cp_sql_to_csv').output.rowsRead",
+														"type": "Expression"
+													}
+												},
+												"RecordsRejected": {
+													"type": "Int64",
+													"value": null
+												},
+												"RecordsSkipped": {
+													"type": "Int64",
+													"value": null
+												},
+												"RecordsWritten": {
+													"type": "Int64",
+													"value": {
+														"value": "@activity('cp_sql_to_csv').output.rowsCopied",
+														"type": "Expression"
+													}
+												},
+												"RunId": {
+													"type": "Int64",
+													"value": {
+														"value": "@variables('v_run_id')",
+														"type": "Expression"
+													}
+												},
+												"Status": {
+													"type": "Int32",
+													"value": "2"
+												}
+											},
+											"queryTimeout": "02:00:00",
+											"partitionOption": "None"
+										},
+										"dataset": {
+											"referenceName": "ds_sql",
+											"type": "DatasetReference",
+											"parameters": {
+												"p_schema": "config",
+												"p_table": "IntegrationConfig",
+												"p_db_domain_name": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+												"p_db_name": "@pipeline().globalParameters.DB_NAME"
+											}
+										}
+									}
+								},
+								{
+									"name": "wb_postprocess_csv",
+									"description": "Invokes the pre-process azure function and passes 3 parameters to perform file validation",
+									"type": "WebActivity",
+									"dependsOn": [
+										{
+											"activity": "complete_run_success_csv",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"method": "POST",
+										"headers": {
+											"Content-Type": "application/json",
+											"Ocp-Apim-Subscription-Key": {
+												"value": "@variables('v_subscription_key')",
+												"type": "Expression"
+											},
+											"CORRELATION_ID": {
+												"value": "@if(\n    equals(pipeline().parameters.p_trigger_type, 'EventTrigger'),\n    pipeline().parameters.p_event_run_id,\n    activity('lkp_start_run').output.firstRow.RunId\n)",
+												"type": "Expression"
+											}
+										},
+										"url": {
+											"value": "@{pipeline().globalParameters.gp_postprocess_function_url}",
+											"type": "Expression"
+										},
+										"body": {
+											"value": "{\n       \"integration_id\": \"@{json(variables('v_config_json')).IntegrationId}\",\n       \"pipeline_name\": \"@{pipeline().Pipeline}\",\n       \"run_id\": \"@{pipeline().RunId}\",\n       \"status\": \"Success\",\n       \"trigger_type\": \"@{pipeline().TriggerType}\"\n     }",
+											"type": "Expression"
+										}
+									}
+								}
+							]
+						},
+						{
+							"value": "JSON",
+							"activities": [
+								{
+									"name": "cp_sql_to_json",
+									"type": "Copy",
+									"dependsOn": [],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureSqlSource",
+											"queryTimeout": "02:00:00",
+											"partitionOption": "None"
+										},
+										"sink": {
+											"type": "JsonSink",
+											"storeSettings": {
+												"type": "AzureBlobFSWriteSettings"
+											},
+											"formatSettings": {
+												"type": "JsonWriteSettings",
+												"filePattern": "arrayOfObjects"
+											}
+										},
+										"enableStaging": false
+									},
+									"inputs": [
+										{
+											"referenceName": "ds_sql",
+											"type": "DatasetReference",
+											"parameters": {
+												"p_schema": "@first(split(json(variables('v_config_json')).TargetTableName, '.'))",
+												"p_table": "@last(split(json(variables('v_config_json')).TargetTableName, '.'))",
+												"p_db_domain_name": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+												"p_db_name": "@pipeline().globalParameters.DB_NAME"
+											}
+										}
+									],
+									"outputs": [
+										{
+											"referenceName": "ds_adls_json_src",
+											"type": "DatasetReference",
+											"parameters": {
+												"p_container": "@json(variables('v_config_json')).TargetContainerName",
+												"p_folder": {
+													"value": "@concat(\n    string(pipeline().parameters.p_integration_id),\n    '/',\n    formatDateTime(pipeline().parameters.p_batch_date,'yyyy'),\n    '/',\n    formatDateTime(pipeline().parameters.p_batch_date,'MM'),\n    '/',\n    formatDateTime(pipeline().parameters.p_batch_date,'dd'),\n    '/'\n)",
+													"type": "Expression"
+												},
+												"p_file": "@concat('sql_to_adls_export_', formatDateTime(utcNow(),'yyyyMMddHHmmss'), '.json')",
+												"p_adls_url": "@pipeline().globalParameters.gp_adls_url"
+											}
+										}
+									]
+								},
+								{
+									"name": "complete_run_success_json",
+									"type": "Lookup",
+									"dependsOn": [
+										{
+											"activity": "cp_sql_to_json",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureSqlSource",
+											"sqlReaderStoredProcedureName": "[audit].[usp_CompleteRun]",
+											"storedProcedureParameters": {
+												"ErrorActivity": {
+													"type": "String",
+													"value": null
+												},
+												"ErrorCode": {
+													"type": "String",
+													"value": null
+												},
+												"ErrorMessage": {
+													"type": "String",
+													"value": null
+												},
+												"RecordsRead": {
+													"type": "Int64",
+													"value": {
+														"value": "@activity('cp_sql_to_json').output.rowsRead",
+														"type": "Expression"
+													}
+												},
+												"RecordsRejected": {
+													"type": "Int64",
+													"value": null
+												},
+												"RecordsSkipped": {
+													"type": "Int64",
+													"value": null
+												},
+												"RecordsWritten": {
+													"type": "Int64",
+													"value": {
+														"value": "@activity('cp_sql_to_json').output.rowsCopied",
+														"type": "Expression"
+													}
+												},
+												"RunId": {
+													"type": "Int64",
+													"value": {
+														"value": "@variables('v_run_id')",
+														"type": "Expression"
+													}
+												},
+												"Status": {
+													"type": "Int32",
+													"value": "2"
+												}
+											},
+											"queryTimeout": "02:00:00",
+											"partitionOption": "None"
+										},
+										"dataset": {
+											"referenceName": "ds_sql",
+											"type": "DatasetReference",
+											"parameters": {
+												"p_schema": "config",
+												"p_table": "IntegrationConfig",
+												"p_db_domain_name": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+												"p_db_name": "@pipeline().globalParameters.DB_NAME"
+											}
+										}
+									}
+								},
+								{
+									"name": "wb_postprocess_json",
+									"description": "Invokes the pre-process azure function and passes 3 parameters to perform file validation",
+									"type": "WebActivity",
+									"dependsOn": [
+										{
+											"activity": "complete_run_success_json",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"method": "POST",
+										"headers": {
+											"Content-Type": "application/json",
+											"Ocp-Apim-Subscription-Key": {
+												"value": "@variables('v_subscription_key')",
+												"type": "Expression"
+											},
+											"CORRELATION_ID": {
+												"value": "@if(\n    equals(pipeline().parameters.p_trigger_type, 'EventTrigger'),\n    pipeline().parameters.p_event_run_id,\n    activity('lkp_start_run').output.firstRow.RunId\n)",
+												"type": "Expression"
+											}
+										},
+										"url": {
+											"value": "@{pipeline().globalParameters.gp_postprocess_function_url}",
+											"type": "Expression"
+										},
+										"body": {
+											"value": "{\n       \"integration_id\": \"@{json(variables('v_config_json')).IntegrationId}\",\n       \"pipeline_name\": \"@{pipeline().Pipeline}\",\n       \"run_id\": \"@{pipeline().RunId}\",\n       \"status\": \"Success\",\n       \"trigger_type\": \"@{pipeline().TriggerType}\"\n     }",
+											"type": "Expression"
+										}
+									}
+								}
+							]
+						},
+						{
+							"value": "Parquet",
+							"activities": [
+								{
+									"name": "cp_sql_to_parquet",
+									"type": "Copy",
+									"dependsOn": [],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureSqlSource",
+											"queryTimeout": "02:00:00",
+											"partitionOption": "None"
+										},
+										"sink": {
+											"type": "ParquetSink",
+											"storeSettings": {
+												"type": "AzureBlobFSWriteSettings"
+											},
+											"formatSettings": {
+												"type": "ParquetWriteSettings"
+											}
+										},
+										"enableStaging": false,
+										"translator": {
+											"type": "TabularTranslator",
+											"typeConversion": true,
+											"typeConversionSettings": {
+												"allowDataTruncation": true,
+												"treatBooleanAsNumber": false
+											}
+										}
+									},
+									"inputs": [
+										{
+											"referenceName": "ds_sql",
+											"type": "DatasetReference",
+											"parameters": {
+												"p_schema": "@first(split(json(variables('v_config_json')).TargetTableName, '.'))",
+												"p_table": "@last(split(json(variables('v_config_json')).TargetTableName, '.'))",
+												"p_db_domain_name": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+												"p_db_name": "@pipeline().globalParameters.DB_NAME"
+											}
+										}
+									],
+									"outputs": [
+										{
+											"referenceName": "ds_adls_parquet_src",
+											"type": "DatasetReference",
+											"parameters": {
+												"p_container": "@json(variables('v_config_json')).TargetContainerName",
+												"p_folder": {
+													"value": "@concat(\n    string(pipeline().parameters.p_integration_id),\n    '/',\n    formatDateTime(pipeline().parameters.p_batch_date,'yyyy'),\n    '/',\n    formatDateTime(pipeline().parameters.p_batch_date,'MM'),\n    '/',\n    formatDateTime(pipeline().parameters.p_batch_date,'dd'),\n    '/'\n)",
+													"type": "Expression"
+												},
+												"p_file": "@concat('sql_to_adls_export_', formatDateTime(utcNow(),'yyyyMMddHHmmss'), '.parquet')",
+												"p_adls_url": "@pipeline().globalParameters.gp_adls_url"
+											}
+										}
+									]
+								},
+								{
+									"name": "complete_run_success_parquet",
+									"type": "Lookup",
+									"dependsOn": [
+										{
+											"activity": "cp_sql_to_parquet",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"source": {
+											"type": "AzureSqlSource",
+											"sqlReaderStoredProcedureName": "[audit].[usp_CompleteRun]",
+											"storedProcedureParameters": {
+												"ErrorActivity": {
+													"type": "String",
+													"value": null
+												},
+												"ErrorCode": {
+													"type": "String",
+													"value": null
+												},
+												"ErrorMessage": {
+													"type": "String",
+													"value": null
+												},
+												"RecordsRead": {
+													"type": "Int64",
+													"value": {
+														"value": "@activity('cp_sql_to_parquet').output.rowsRead",
+														"type": "Expression"
+													}
+												},
+												"RecordsRejected": {
+													"type": "Int64",
+													"value": null
+												},
+												"RecordsSkipped": {
+													"type": "Int64",
+													"value": null
+												},
+												"RecordsWritten": {
+													"type": "Int64",
+													"value": {
+														"value": "@activity('cp_sql_to_parquet').output.rowsCopied",
+														"type": "Expression"
+													}
+												},
+												"RunId": {
+													"type": "Int64",
+													"value": {
+														"value": "@variables('v_run_id')",
+														"type": "Expression"
+													}
+												},
+												"Status": {
+													"type": "Int32",
+													"value": "2"
+												}
+											},
+											"queryTimeout": "02:00:00",
+											"partitionOption": "None"
+										},
+										"dataset": {
+											"referenceName": "ds_sql",
+											"type": "DatasetReference",
+											"parameters": {
+												"p_schema": "config",
+												"p_table": "IntegrationConfig",
+												"p_db_domain_name": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+												"p_db_name": "@pipeline().globalParameters.DB_NAME"
+											}
+										}
+									}
+								},
+								{
+									"name": "wb_postprocess_parquet",
+									"description": "Invokes the pre-process azure function and passes 3 parameters to perform file validation",
+									"type": "WebActivity",
+									"dependsOn": [
+										{
+											"activity": "complete_run_success_parquet",
+											"dependencyConditions": [
+												"Succeeded"
+											]
+										}
+									],
+									"policy": {
+										"timeout": "0.12:00:00",
+										"retry": 0,
+										"retryIntervalInSeconds": 30,
+										"secureOutput": false,
+										"secureInput": false
+									},
+									"userProperties": [],
+									"typeProperties": {
+										"method": "POST",
+										"headers": {
+											"Content-Type": "application/json",
+											"Ocp-Apim-Subscription-Key": {
+												"value": "@variables('v_subscription_key')",
+												"type": "Expression"
+											},
+											"CORRELATION_ID": {
+												"value": "@if(\n    equals(pipeline().parameters.p_trigger_type, 'EventTrigger'),\n    pipeline().parameters.p_event_run_id,\n    activity('lkp_start_run').output.firstRow.RunId\n)",
+												"type": "Expression"
+											}
+										},
+										"url": {
+											"value": "@{pipeline().globalParameters.gp_postprocess_function_url}",
+											"type": "Expression"
+										},
+										"body": {
+											"value": "{\n       \"integration_id\": \"@{json(variables('v_config_json')).IntegrationId}\",\n       \"pipeline_name\": \"@{pipeline().Pipeline}\",\n       \"run_id\": \"@{pipeline().RunId}\",\n       \"status\": \"Success\",\n       \"trigger_type\": \"@{pipeline().TriggerType}\"\n     }",
+											"type": "Expression"
+										}
+									}
+								}
+							]
+						}
+					]
+				}
+			},
+			{
+				"name": "sp_delete_exported_data",
+				"description": "Deletes the records from the Source SQL Table after export.",
+				"type": "Script",
+				"dependsOn": [
+					{
+						"activity": "sw_file_format",
+						"dependencyConditions": [
+							"Succeeded"
+						]
+					}
+				],
+				"policy": {
+					"timeout": "0.12:00:00",
+					"retry": 0,
+					"retryIntervalInSeconds": 30,
+					"secureOutput": false,
+					"secureInput": false
+				},
+				"userProperties": [],
+				"linkedServiceName": {
+					"referenceName": "ls_azure_sql",
+					"type": "LinkedServiceReference",
+					"parameters": {
+						"p_db_domain_name": {
+							"value": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+							"type": "Expression"
+						},
+						"p_db_name": {
+							"value": "@pipeline().globalParameters.DB_NAME",
+							"type": "Expression"
+						}
+					}
+				},
+				"typeProperties": {
+					"scripts": [
+						{
+							"type": "NonQuery",
+							"text": {
+								"value": "@concat('DELETE FROM ', json(variables('v_config_json')).TargetTableName)",
+								"type": "Expression"
+							}
+						}
+					],
+					"scriptBlockExecutionTimeout": "02:00:00"
+				}
+			},
+			{
+				"name": "if_sw_file_format_status",
+				"type": "IfCondition",
+				"dependsOn": [
+					{
+						"activity": "sw_file_format",
+						"dependencyConditions": [
+							"Completed"
+						]
+					}
+				],
+				"userProperties": [],
+				"typeProperties": {
+					"expression": {
+						"value": "@equals(activity('sw_file_format').Status, 'Failed')",
+						"type": "Expression"
+					},
+					"ifFalseActivities": [
+						{
+							"name": "sp_release_runlock_success",
+							"type": "SqlServerStoredProcedure",
+							"dependsOn": [],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"storedProcedureName": "[control].[usp_ReleaseRunLock]",
+								"storedProcedureParameters": {
+									"IntegrationId": {
+										"value": {
+											"value": "@pipeline().parameters.p_integration_id",
+											"type": "Expression"
+										},
+										"type": "Int64"
+									},
+									"RunId": {
+										"value": {
+											"value": "@if(\n    equals(pipeline().parameters.p_trigger_type, 'EventTrigger'),\n    pipeline().parameters.p_event_run_id,\n    pipeline().RunId\n)",
+											"type": "Expression"
+										},
+										"type": "Guid"
+									}
+								}
+							},
+							"linkedServiceName": {
+								"referenceName": "ls_azure_sql",
+								"type": "LinkedServiceReference",
+								"parameters": {
+									"p_db_domain_name": {
+										"value": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+										"type": "Expression"
+									},
+									"p_db_name": {
+										"value": "@pipeline().globalParameters.DB_NAME",
+										"type": "Expression"
+									}
+								}
+							}
+						}
+					],
+					"ifTrueActivities": [
+						{
+							"name": "sp_release_runlock_fail",
+							"type": "SqlServerStoredProcedure",
+							"dependsOn": [],
+							"policy": {
+								"timeout": "0.12:00:00",
+								"retry": 0,
+								"retryIntervalInSeconds": 30,
+								"secureOutput": false,
+								"secureInput": false
+							},
+							"userProperties": [],
+							"typeProperties": {
+								"storedProcedureName": "[control].[usp_ReleaseRunLock]",
+								"storedProcedureParameters": {
+									"IntegrationId": {
+										"value": {
+											"value": "@pipeline().parameters.p_integration_id",
+											"type": "Expression"
+										},
+										"type": "Int64"
+									},
+									"RunId": {
+										"value": {
+											"value": "@if(\n    equals(pipeline().parameters.p_trigger_type, 'EventTrigger'),\n    pipeline().parameters.p_event_run_id,\n    pipeline().RunId\n)",
+											"type": "Expression"
+										},
+										"type": "Guid"
+									}
+								}
+							},
+							"linkedServiceName": {
+								"referenceName": "ls_azure_sql",
+								"type": "LinkedServiceReference",
+								"parameters": {
+									"p_db_domain_name": {
+										"value": "@pipeline().globalParameters.DB_DOMAIN_NAME",
+										"type": "Expression"
+									},
+									"p_db_name": {
+										"value": "@pipeline().globalParameters.DB_NAME",
+										"type": "Expression"
+									}
+								}
+							}
+						},
+						{
+							"name": "fail_pipeline",
+							"type": "Fail",
+							"dependsOn": [
+								{
+									"activity": "sp_release_runlock_fail",
+									"dependencyConditions": [
+										"Succeeded"
+									]
+								}
+							],
+							"userProperties": [],
+							"typeProperties": {
+								"message": {
+									"value": "@concat(     'Pipeline run failed because due to an internal activity failure in sw_file_format activity ',     'IntegrationId=', string(pipeline().parameters.p_integration_id),     ', IntegrationName=', pipeline().parameters.p_integration_name,     ', PipelineRunId=', pipeline().RunId )",
+									"type": "Expression"
+								},
+								"errorCode": "PIPELINE_RUN_FAIL"
+							}
+						}
+					]
+				}
+			}
+		],
+		"parameters": {
+			"p_integration_id": {
+				"type": "int"
+			},
+			"p_master_run_id": {
+				"type": "string"
+			},
+			"p_batch_date": {
+				"type": "string"
+			},
+			"p_trigger_type": {
+				"type": "string"
+			},
+			"p_integration_name": {
+				"type": "string"
+			},
+			"p_event_run_id": {
+				"type": "string"
+			}
+		},
+		"variables": {
+			"v_config_json": {
+				"type": "String"
+			},
+			"v_run_id": {
+				"type": "Integer"
+			},
+			"v_if_preprocessed": {
+				"type": "Boolean"
+			},
+			"v_subscription_key": {
+				"type": "String"
+			},
+			"v_if_valid": {
+				"type": "String"
+			}
+		},
+		"annotations": []
+	}
+}

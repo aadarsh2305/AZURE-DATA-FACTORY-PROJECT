@@ -1,0 +1,9 @@
+{
+	"name": "shir-csc-dna-use-int-dev",
+	"properties": {
+		"type": "SelfHosted",
+		"typeProperties": {
+			"selfContainedInteractiveAuthoringEnabled": false
+		}
+	}
+}
